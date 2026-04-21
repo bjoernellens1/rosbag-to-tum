@@ -1,0 +1,53 @@
+[project]
+name = "rosbag-to-tum"
+version = "0.1.0"
+description = "Convert ROS bags (MCAP) to TUM RGB-D dataset format with rich metadata"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "bjoernellens1" }]
+keywords = ["rosbag", "tum", "rgbd", "dataset", "converter"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+]
+
+dependencies = [
+    "mcap>=1.1.0",
+    "numpy>=1.26.0",
+    "opencv-python>=4.10.0",
+    "pyyaml>=6.0",
+    "pytransform3d>=2.2.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+rosbag-to-tum = "rosbag_to_tum.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.4.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
