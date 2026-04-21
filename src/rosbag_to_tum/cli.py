@@ -230,7 +230,7 @@ def check_already_converted(output_dir: Path, bag_name: str) -> bool:
 @click.option("--visual-tracker-only", is_flag=True, help="Only use visual tracker (no odometry/TF)")
 @click.option("--max-frames", type=int, default=None, help="Max frames per bag (for testing)")
 @click.option("--bag-filter", type=str, default=None, help="Only process bags matching this name pattern")
-@click.option("--workers", "-j", type=int, default=None, help="Number of parallel workers for image encoding")
+@click.option("--workers", "-j", type=int, default=None, help="Number of parallel workers (default: all CPU cores)")
 def main(
     bags_path: Path,
     output_dir: Path,
