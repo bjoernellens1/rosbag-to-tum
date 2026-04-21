@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import struct
+
 import numpy as np
 
 
@@ -74,9 +76,13 @@ def parse_tf_message(data: bytes) -> list[tuple[str, str, int, tuple, tuple]]:
     try:
         offset = 0
 
-        # Array header: 4 bytes count
-        if len(data) < 4:
+        if len(data) < 8:
             return []
+
+        # Skip seq (4 bytes)
+        offset += 4
+
+        # Array count (4 bytes)
         count = int.from_bytes(data[offset:offset+4], 'little')
         offset += 4
 
@@ -84,43 +90,39 @@ def parse_tf_message(data: bytes) -> list[tuple[str, str, int, tuple, tuple]]:
             if offset >= len(data):
                 break
 
-            # Each transform:
-            # header: seq(4) + stamp sec(4) + stamp nsec(4) + frame_id len(4) + frame_id
-            # child_frame_id len(4) + child_frame_id
-            # transform: translation(24 bytes xyz) + rotation(32 bytes quat)
-
-            # Skip header seq
-            offset += 4
-
             # stamp sec + nsec (8 bytes total)
             sec = int.from_bytes(data[offset:offset+4], 'little')
             nsec = int.from_bytes(data[offset+4:offset+8], 'little')
             timestamp_ns = sec * 1_000_000_000 + nsec
             offset += 8
 
-            # frame_id string
+            # frame_id string (parent frame)
             frame_len = int.from_bytes(data[offset:offset+4], 'little')
             offset += 4
-            parent_frame = data[offset:offset+frame_len].decode('utf-8', errors='ignore')
+            parent_frame = data[offset:offset+frame_len].decode('utf-8', errors='ignore').rstrip('\x00')
             offset += frame_len
+            # Align to 4-byte boundary
+            offset += (4 - (frame_len % 4)) % 4
 
             # child_frame_id string
             child_len = int.from_bytes(data[offset:offset+4], 'little')
             offset += 4
-            child_frame = data[offset:offset+child_len].decode('utf-8', errors='ignore')
+            child_frame = data[offset:offset+child_len].decode('utf-8', errors='ignore').rstrip('\x00')
             offset += child_len
+            # Align to 4-byte boundary
+            offset += (4 - (child_len % 4)) % 4
 
             # transform translation xyz (3 * 8 bytes)
-            tx = float.from_buffer(data[offset:offset+8])
-            ty = float.from_buffer(data[offset+8:offset+16])
-            tz = float.from_buffer(data[offset+16:offset+24])
+            tx = struct.unpack('<d', data[offset:offset+8])[0]
+            ty = struct.unpack('<d', data[offset+8:offset+16])[0]
+            tz = struct.unpack('<d', data[offset+16:offset+24])[0]
             offset += 24
 
-            # rotation quaternion (4 * 8 bytes) - ROS uses xyz order internally
-            qx = float.from_buffer(data[offset:offset+8])
-            qy = float.from_buffer(data[offset+8:offset+16])
-            qz = float.from_buffer(data[offset+16:offset+24])
-            qw = float.from_buffer(data[offset+24:offset+32])
+            # rotation quaternion (4 * 8 bytes) - ROS uses xyzw order in buffer
+            qx = struct.unpack('<d', data[offset:offset+8])[0]
+            qy = struct.unpack('<d', data[offset+8:offset+16])[0]
+            qz = struct.unpack('<d', data[offset+16:offset+24])[0]
+            qw = struct.unpack('<d', data[offset+24:offset+32])[0]
             offset += 32
 
             transforms.append((parent_frame, child_frame, timestamp_ns, (tx, ty, tz), (qw, qx, qy, qz)))
@@ -134,43 +136,49 @@ def parse_tf_message(data: bytes) -> list[tuple[str, str, int, tuple, tuple]]:
 def parse_odometry_message(data: bytes) -> tuple[int, tuple, tuple] | None:
     """Parse Odometry CDR bytes.
 
+    RealSense odometry layout:
+    - seq(4), stamp.sec(4), stamp.nsec(4) = 12 bytes
+    - frame_id: len(4) + content + null padding
+    - child_frame_id: len(4) + content + null padding
+    - pose: position(24 bytes) + orientation(32 bytes)
+
     Returns: (timestamp_ns, pose_xyz, pose_quaternion)
     """
     try:
         offset = 0
-
-        # header
         offset += 4  # seq
-        sec = int.from_bytes(data[offset:offset+4], 'little')
+        sec = int.from_bytes(data[offset:offset+4], 'little', signed=True)
         nsec = int.from_bytes(data[offset+4:offset+8], 'little')
         timestamp_ns = sec * 1_000_000_000 + nsec
         offset += 8
 
+        # frame_id string
         frame_len = int.from_bytes(data[offset:offset+4], 'little')
-        offset += 4 + frame_len
+        offset += 4
+        frame_id = data[offset:offset+frame_len].decode('utf-8', errors='ignore').rstrip('\x00')
+        offset += frame_len
+        # Align to 4-byte boundary
+        offset += (4 - (frame_len % 4)) % 4
 
+        # child_frame_id string
         child_len = int.from_bytes(data[offset:offset+4], 'little')
-        offset += 4 + child_len
+        offset += 4
+        child_frame = data[offset:offset+child_len].decode('utf-8', errors='ignore').rstrip('\x00')
+        offset += child_len
+        # Align to 4-byte boundary
+        offset += (4 - (child_len % 4)) % 4
 
-        # pose
-        offset += 4  # sequence
-        # pose header
-        offset += 4 + int.from_bytes(data[offset:offset+4], 'little')  # frame_id
-        child_len = int.from_bytes(data[offset:offset+4], 'little')
-        offset += 4 + child_len
-
-        # pose position (24 bytes)
-        tx = float.from_buffer(data[offset:offset+8])
-        ty = float.from_buffer(data[offset+8:offset+16])
-        tz = float.from_buffer(data[offset+16:offset+24])
+        # pose position (24 bytes = 3 * 8)
+        tx = struct.unpack('<d', data[offset:offset+8])[0]
+        ty = struct.unpack('<d', data[offset+8:offset+16])[0]
+        tz = struct.unpack('<d', data[offset+16:offset+24])[0]
         offset += 24
 
-        # pose orientation (32 bytes)
-        qx = float.from_buffer(data[offset:offset+8])
-        qy = float.from_buffer(data[offset+8:offset+16])
-        qz = float.from_buffer(data[offset+16:offset+24])
-        qw = float.from_buffer(data[offset+24:offset+32])
-        offset += 32
+        # pose orientation quaternion (32 bytes = 4 * 8)
+        qx = struct.unpack('<d', data[offset:offset+8])[0]
+        qy = struct.unpack('<d', data[offset+8:offset+16])[0]
+        qz = struct.unpack('<d', data[offset+16:offset+24])[0]
+        qw = struct.unpack('<d', data[offset+24:offset+32])[0]
 
         return timestamp_ns, (tx, ty, tz), (qw, qx, qy, qz)
 

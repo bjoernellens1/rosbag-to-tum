@@ -85,7 +85,9 @@ class BagMetadata:
 def detect_sensor_type(topics: dict[str, str]) -> str:
     """Detect sensor type from topic names."""
     topics_str = " ".join(topics.keys()).lower()
-    
+
+    if "orbbec" in topics_str or "femto" in topics_str:
+        return "orbbec_femto_bolt"
     if "realsense" in topics_str or "rs" in topics_str:
         return "realsense"
     if "kinect" in topics_str:

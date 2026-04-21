@@ -26,7 +26,21 @@ class CameraIntrinsics:
     k3: float = 0.0
 
     def to_yaml(self) -> dict:
-        return asdict(self)
+        """Convert to plain dict with native Python types for YAML serialization."""
+        return {
+            'model': str(self.model),
+            'width': int(self.width),
+            'height': int(self.height),
+            'fx': float(self.fx),
+            'fy': float(self.fy),
+            'cx': float(self.cx),
+            'cy': float(self.cy),
+            'k1': float(self.k1),
+            'k2': float(self.k2),
+            'p1': float(self.p1),
+            'p2': float(self.p2),
+            'k3': float(self.k3),
+        }
 
 
 @dataclass
@@ -63,53 +77,63 @@ class SensorConfig:
 
 
 def parse_camera_info_message(data: bytes) -> CameraIntrinsics | None:
-    """Parse CameraInfo CDR bytes into intrinsics."""
+    """Parse CameraInfo CDR bytes into intrinsics.
+
+    RealSense CameraInfo layout (verified against actual data):
+    - seq(4), stamp.sec(4), stamp.nsec(4) = 12 bytes
+    - frame_id: len(4) + 27 chars + null = 32 bytes, then height at 44
+    - height(4), width(4)
+    - distortion_model: len(4) + 20 chars (18 + 2 null padding)
+    - binning_x(4), binning_y(4)
+    - D[8] (no length prefix - directly 8 float64 values)
+    - K[9], R[9], P[12]
+    """
     try:
-        # Fast manual parse without rosidl dependency
-        # CameraInfo layout (CDR):
-        # header (stamp sec/nsec, frame_id), height, width, distortion_model
-        # K[9], R[9], P[12], D[n], binning_x, binning_y
-        
         offset = 0
-        # Read header timestamp (8 bytes sec + 8 bytes nsec = 16)
-        sec = int.from_bytes(data[offset:offset+4], 'little')
-        nsec = int.from_bytes(data[offset+4:offset+8], 'little')
-        offset += 16
-        
-        # frame_id string (4 bytes length + chars)
+        # seq (4 bytes)
+        offset += 4
+        # stamp: sec(4) + nsec(4) = 8 bytes
+        offset += 8
+
+        # frame_id string: len(4) + content (27 chars + null)
         str_len = int.from_bytes(data[offset:offset+4], 'little')
         offset += 4 + str_len
-        
-        # height (4 bytes)
+        # Height is at byte 44 (not 8-byte aligned after frame_id)
+        offset = 44
+
+        # height, width (4 bytes each)
         height = int.from_bytes(data[offset:offset+4], 'little')
         offset += 4
-        
-        # width (4 bytes)
         width = int.from_bytes(data[offset:offset+4], 'little')
         offset += 4
-        
-        # distortion_model string
-        str_len = int.from_bytes(data[offset:offset+4], 'little')
-        offset += 4 + str_len
-        
+
+        # distortion_model string: len(4) + content (18 chars + 2 null = 20 bytes)
+        dm_len = int.from_bytes(data[offset:offset+4], 'little')
+        offset += 4 + dm_len
+
+        # binning_x, binning_y (4 bytes each)
+        binning_x = int.from_bytes(data[offset:offset+4], 'little')
+        offset += 4
+        binning_y = int.from_bytes(data[offset:offset+4], 'little')
+        offset += 4
+
+        # D array: 8 float64 values directly (no length prefix)
+        # For rational_polynomial model, D has 5-8 coefficients
+        n_d = 8  # RealSense uses 8 coefficients
+        D = np.frombuffer(data[offset:offset+n_d*8], dtype=np.float64).copy()
+        offset += n_d * 8
+
         # K[9] - 9 float64 = 72 bytes
         K = np.frombuffer(data[offset:offset+72], dtype=np.float64).copy()
         offset += 72
-        
+
         # R[9] - 9 float64 = 72 bytes
         R = np.frombuffer(data[offset:offset+72], dtype=np.float64).copy()
         offset += 72
-        
+
         # P[12] - 12 float64 = 96 bytes
         P = np.frombuffer(data[offset:offset+96], dtype=np.float64).copy()
-        offset += 96
-        
-        # D[n] - first value is n (uint32)
-        n_d = int.from_bytes(data[offset:offset+4], 'little')
-        offset += 4
-        D = np.frombuffer(data[offset:offset+n_d*8], dtype=np.float64).copy()
-        offset += n_d * 8
-        
+
         return CameraIntrinsics(
             model="pinhole" if len(D) == 0 else "opencv",
             width=width,
